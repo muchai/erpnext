@@ -47,7 +47,18 @@ class BOM(WebsiteGenerator):
 		else:
 			idx = 1
 
-		self.name = 'BOM-' + self.item + ('-%.3i' % idx)
+		name = 'BOM-' + self.item + ('-%.3i' % idx)
+		if frappe.db.exists("BOM", name):
+			conflicting_bom = frappe.get_doc("BOM", name)
+
+			if conflicting_bom.item != self.item:
+
+				frappe.throw(_("""A BOM with name {0} already exists for item {1}.
+					<br> Did you rename the item? Please contact Administrator / Tech support
+				""").format(frappe.bold(name), frappe.bold(conflicting_bom.item)))
+
+		self.name = name
+
 
 	def validate(self):
 		self.route = frappe.scrub(self.name).replace('_', '-')
@@ -486,6 +497,14 @@ class BOM(WebsiteGenerator):
 
 		self.scrap_material_cost = total_sm_cost
 		self.base_scrap_material_cost = base_total_sm_cost
+
+	def update_new_bom(self, old_bom, new_bom, rate):
+		for d in self.get("items"):
+			if d.bom_no != old_bom: continue
+
+			d.bom_no = new_bom
+			d.rate = rate
+			d.amount = (d.stock_qty or d.qty) * rate
 
 	def update_exploded_items(self):
 		""" Update Flat BOM, following will be correct data"""
