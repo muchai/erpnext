@@ -45,6 +45,7 @@ class BuyingController(StockController):
 		self.validate_warehouse()
 		self.validate_from_warehouse()
 		self.set_supplier_address()
+		self.validate_asset_return()
 
 		if self.doctype=="Purchase Invoice":
 			self.validate_purchase_receipt_if_update_stock()
@@ -100,6 +101,19 @@ class BuyingController(StockController):
 				for d in tax_for_valuation:
 					d.category = 'Total'
 				msgprint(_('Tax Category has been changed to "Total" because all the Items are non-stock items'))
+
+	def validate_asset_return(self):
+		if self.doctype not in ['Purchase Receipt', 'Purchase Invoice'] or not self.is_return:
+			return
+
+		purchase_doc_field = 'purchase_receipt' if self.doctype == 'Purchase Receipt' else 'purchase_invoice'
+		not_cancelled_asset = [d.name for d in frappe.db.get_all("Asset", {
+			purchase_doc_field: self.return_against,
+			"docstatus": 1
+		})]
+		if self.is_return and len(not_cancelled_asset):
+			frappe.throw(_("{} has submitted assets linked to it. You need to cancel the assets to create purchase return.".format(self.return_against)),
+				title=_("Not Allowed"))
 
 	def get_asset_items(self):
 		if self.doctype not in ['Purchase Order', 'Purchase Invoice', 'Purchase Receipt']:
@@ -677,10 +691,10 @@ class BuyingController(StockController):
 						for qty in range(cint(d.qty)):
 							asset = self.make_asset(d)
 							created_assets.append(asset)
-						
+
 						if len(created_assets) > 5:
 							# dont show asset form links if more than 5 assets are created
-							messages.append(_('{} Asset{} created for {}').format(len(created_assets), is_plural, frappe.bold(d.item_code)))
+							messages.append(_('{} Assets created for {}').format(len(created_assets), frappe.bold(d.item_code)))
 						else:
 							assets_link = list(map(lambda d: frappe.utils.get_link_to_form('Asset', d), created_assets))
 							assets_link = frappe.bold(','.join(assets_link))

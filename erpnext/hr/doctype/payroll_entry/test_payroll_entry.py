@@ -13,11 +13,11 @@ from erpnext.hr.doctype.salary_slip.test_salary_slip import get_salary_component
 		make_earning_salary_component, make_deduction_salary_component
 from erpnext.hr.doctype.salary_structure.test_salary_structure import make_salary_structure
 from erpnext.loan_management.doctype.loan.test_loan import create_loan, make_loan_disbursement_entry
-from erpnext.loan_management.doctype.loan_interest_accrual.loan_interest_accrual import make_accrual_interest_entry_for_term_loans
+from erpnext.loan_management.doctype.process_loan_interest_accrual.process_loan_interest_accrual import process_loan_interest_accrual_for_term_loans
 
 class TestPayrollEntry(unittest.TestCase):
 	def setUp(self):
-		for dt in ["Salary Slip", "Salary Component", "Salary Component Account", "Payroll Entry"]:
+		for dt in ["Salary Slip", "Salary Component", "Salary Component Account", "Payroll Entry", "Salary Structure"]:
 			frappe.db.sql("delete from `tab%s`" % dt)
 
 		make_earning_salary_component(setup=True, company_list=["_Test Company"])
@@ -81,7 +81,7 @@ class TestPayrollEntry(unittest.TestCase):
 
 		make_loan_disbursement_entry(loan.name, loan.loan_amount, disbursement_date=add_months(nowdate(), -1))
 
-		make_accrual_interest_entry_for_term_loans(posting_date=nowdate())
+		process_loan_interest_accrual_for_term_loans(posting_date=nowdate())
 
 
 		dates = get_start_end_dates('Monthly', nowdate())

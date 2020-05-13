@@ -175,6 +175,20 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 			};
 		}
 
+		if (this.frm.fields_dict["items"].grid.get_field('blanket_order')) {
+			this.frm.set_query("blanket_order", "items", function(doc, cdt, cdn) {
+				var item = locals[cdt][cdn];
+				return {
+					query: "erpnext.controllers.queries.get_blanket_orders",
+					filters: {
+						"company": doc.company,
+						"blanket_order_type": doc.doctype === "Sales Order" ? "Selling" : "Purchasing",
+						"item": item.item_code
+					}
+				}
+			});
+		}
+
 	},
 	onload: function() {
 		var me = this;
@@ -288,7 +302,7 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 		this.setup_sms();
 		this.setup_quality_inspection();
 		let scan_barcode_field = this.frm.get_field('scan_barcode');
-		if (scan_barcode_field) {
+		if (scan_barcode_field && scan_barcode_field.get_value()) {
 			scan_barcode_field.set_value("");
 			scan_barcode_field.set_new_description("");
 
@@ -362,12 +376,17 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 
 				['serial_no', 'batch_no', 'barcode'].forEach(field => {
 					if (data[field] && frappe.meta.has_field(row_to_modify.doctype, field)) {
+
+						let value = (row_to_modify[field] && field === "serial_no")
+							? row_to_modify[field] + '\n' + data[field] : data[field];
+
 						frappe.model.set_value(row_to_modify.doctype,
-							row_to_modify.name, field, data[field]);
+							row_to_modify.name, field, value);
 					}
 				});
 
 				scan_barcode_field.set_value('');
+				refresh_field("items");
 			});
 		}
 		return false;
@@ -468,6 +487,7 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 							item_code: item.item_code,
 							barcode: item.barcode,
 							serial_no: item.serial_no,
+							batch_no: item.batch_no,
 							set_warehouse: me.frm.doc.set_warehouse,
 							warehouse: item.warehouse,
 							customer: me.frm.doc.customer || me.frm.doc.party_name,
@@ -493,7 +513,6 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 							conversion_factor: item.conversion_factor,
 							weight_per_unit: item.weight_per_unit,
 							weight_uom: item.weight_uom,
-							uom : item.uom,
 							manufacturer: item.manufacturer,
 							stock_uom: item.stock_uom,
 							pos_profile: me.frm.doc.doctype == 'Sales Invoice' ? me.frm.doc.pos_profile : '',
@@ -545,6 +564,10 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 											if(!d[k]) d[k] = v;
 										});
 
+										if (d.has_batch_no && d.has_serial_no) {
+											d.batch_no = undefined;
+										}
+
 										erpnext.show_serial_batch_selector(me.frm, d, (item) => {
 											me.frm.script_manager.trigger('qty', item.doctype, item.name);
 											if (!me.frm.doc.set_warehouse)
@@ -553,7 +576,13 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 									}
 								},
 								() => me.conversion_factor(doc, cdt, cdn, true),
-								() => me.remove_pricing_rule(item)
+								() => me.remove_pricing_rule(item),
+								() => {
+									if (item.apply_rule_on_other_items) {
+										let key = item.name;
+										me.apply_rule_on_other_items({key: item});
+									}
+								}
 							]);
 						}
 					}
@@ -632,6 +661,7 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 
 				// Add the new list to the serial no. field in grid with each in new line
 				item.serial_no = valid_serial_nos.join('\n');
+				item.conversion_factor = item.conversion_factor || 1;
 
 				refresh_field("serial_no", item.name, item.parentfield);
 				if(!doc.is_return && cint(user_defaults.set_qty_in_transactions_based_on_serial_no_input)) {
@@ -887,7 +917,7 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 
 	shipping_rule: function() {
 		var me = this;
-		if(this.frm.doc.shipping_rule) {
+		if(this.frm.doc.shipping_rule && this.frm.doc.shipping_address) {
 			return this.frm.call({
 				doc: this.frm.doc,
 				method: "apply_shipping_rule",
@@ -1387,20 +1417,22 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 
 	apply_rule_on_other_items: function(args) {
 		const me = this;
-		const fields = ["discount_percentage", "discount_amount", "rate"];
+		const fields = ["discount_percentage", "pricing_rules", "discount_amount", "rate"];
 
 		for(var k in args) {
 			let data = args[k];
 
-			me.frm.doc.items.forEach(d => {
-				if (in_list(data.apply_rule_on_other_items, d[data.apply_rule_on])) {
-					for(var k in data) {
-						if (in_list(fields, k)) {
-							frappe.model.set_value(d.doctype, d.name, k, data[k]);
+			if (data && data.apply_rule_on_other_items) {
+				me.frm.doc.items.forEach(d => {
+					if (in_list(data.apply_rule_on_other_items, d[data.apply_rule_on])) {
+						for(var k in data) {
+							if (in_list(fields, k) && data[k] && (data.price_or_product_discount === 'price' || k === 'pricing_rules')) {
+								frappe.model.set_value(d.doctype, d.name, k, data[k]);
+							}
 						}
 					}
-				}
-			});
+				});
+			}
 		}
 	},
 
@@ -1415,6 +1447,8 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 			for (let key in free_item_data) {
 				row_to_modify[key] = free_item_data[key];
 			}
+		} if (items && items.length && free_item_data) {
+			items[0].qty = free_item_data.qty
 		}
 	},
 
@@ -1869,21 +1903,16 @@ erpnext.TransactionController = erpnext.taxes_and_totals.extend({
 	},
 
 	set_reserve_warehouse: function() {
-		this.autofill_warehouse("reserve_warehouse");
+		this.autofill_warehouse(this.frm.doc.supplied_items, "reserve_warehouse", this.frm.doc.set_reserve_warehouse);
 	},
 
 	set_warehouse: function() {
-		this.autofill_warehouse("warehouse");
+		this.autofill_warehouse(this.frm.doc.items, "warehouse", this.frm.doc.set_warehouse);
 	},
 
-	autofill_warehouse : function (warehouse_field) {
-		// set warehouse in all child table rows
-		var me = this;
-		let warehouse = (warehouse_field === "warehouse") ? me.frm.doc.set_warehouse : me.frm.doc.set_reserve_warehouse;
-		let child_table = (warehouse_field === "warehouse") ? me.frm.doc.items : me.frm.doc.supplied_items;
-		let doctype = (warehouse_field === "warehouse") ? (me.frm.doctype + " Item") : (me.frm.doctype + " Item Supplied");
-
-		if(warehouse) {
+	autofill_warehouse : function (child_table, warehouse_field, warehouse) {
+		if (warehouse && child_table && child_table.length) {
+			let doctype = child_table[0].doctype;
 			$.each(child_table || [], function(i, item) {
 				frappe.model.set_value(doctype, item.name, warehouse_field, warehouse);
 			});

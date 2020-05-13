@@ -421,12 +421,17 @@ class WorkOrder(Document):
 		return holidays[holiday_list]
 
 	def update_operation_status(self):
+		allowance_percentage = flt(frappe.db.get_single_value("Manufacturing Settings", "overproduction_percentage_for_work_order"))
+		max_allowed_qty_for_wo = flt(self.qty) + (allowance_percentage/100 * flt(self.qty))
+
 		for d in self.get("operations"):
 			if not d.completed_qty:
 				d.status = "Pending"
 			elif flt(d.completed_qty) < flt(self.qty):
 				d.status = "Work in Progress"
 			elif flt(d.completed_qty) == flt(self.qty):
+				d.status = "Completed"
+			elif flt(d.completed_qty) <= max_allowed_qty_for_wo:
 				d.status = "Completed"
 			else:
 				frappe.throw(_("Completed Qty can not be greater than 'Qty to Manufacture'"))
@@ -552,24 +557,33 @@ class WorkOrder(Document):
 			d.db_set('transferred_qty', flt(transferred_qty), update_modified = False)
 
 	def update_consumed_qty_for_required_items(self):
-		'''update consumed qty from submitted stock entries for that item against
-			the work order'''
+		'''
+			Update consumed qty from submitted stock entries
+			against a work order for each stock item
+		'''
 
-		for d in self.required_items:
-			consumed_qty = frappe.db.sql('''select sum(qty)
-				from `tabStock Entry` entry, `tabStock Entry Detail` detail
-				where
+		for item in self.required_items:
+			consumed_qty = frappe.db.sql('''
+				SELECT
+					SUM(qty)
+				FROM
+					`tabStock Entry` entry,
+					`tabStock Entry Detail` detail
+				WHERE
 					entry.work_order = %(name)s
-					and (entry.purpose = "Material Consumption for Manufacture"
-					or entry.purpose = "Manufacture")
-					and entry.docstatus = 1
-					and detail.parent = entry.name
-					and (detail.item_code = %(item)s or detail.original_item = %(item)s)''', {
-						'name': self.name,
-						'item': d.item_code
-					})[0][0]
+						AND (entry.purpose = "Material Consumption for Manufacture"
+							OR entry.purpose = "Manufacture")
+						AND entry.docstatus = 1
+						AND detail.parent = entry.name
+						AND detail.s_warehouse IS NOT null
+						AND (detail.item_code = %(item)s
+							OR detail.original_item = %(item)s)
+				''', {
+					'name': self.name,
+					'item': item.item_code
+				})[0][0]
 
-			d.db_set('consumed_qty', flt(consumed_qty), update_modified = False)
+			item.db_set('consumed_qty', flt(consumed_qty), update_modified=False)
 
 	def make_bom(self):
 		data = frappe.db.sql(""" select sed.item_code, sed.qty, sed.s_warehouse
@@ -648,7 +662,7 @@ def get_item_details(item, project = None):
 	return res
 
 @frappe.whitelist()
-def make_work_order(item, qty=0, project=None):
+def make_work_order(bom_no, item, qty=0, project=None):
 	if not frappe.has_permission("Work Order", "write"):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 
@@ -657,6 +671,7 @@ def make_work_order(item, qty=0, project=None):
 	wo_doc = frappe.new_doc("Work Order")
 	wo_doc.production_item = item
 	wo_doc.update(item_details)
+	wo_doc.bom_no = bom_no
 
 	if flt(qty) > 0:
 		wo_doc.qty = flt(qty)
