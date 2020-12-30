@@ -68,7 +68,7 @@ class Quotation(SellingController):
 
 	def declare_enquiry_lost(self, lost_reasons_list, detailed_reason=None):
 		if not self.has_sales_order():
-			get_lost_reasons = frappe.get_list('Opportunity Lost Reason',
+			get_lost_reasons = frappe.get_list('Quotation Lost Reason',
 			fields = ["name"])
 			lost_reasons_lst = [reason.get('name') for reason in get_lost_reasons]
 			frappe.db.set(self, 'status', 'Lost')
@@ -99,6 +99,8 @@ class Quotation(SellingController):
 		self.update_lead()
 
 	def on_cancel(self):
+		if self.lost_reasons:
+			self.lost_reasons = []
 		super(Quotation, self).on_cancel()
 
 		#update enquiry status
@@ -197,9 +199,9 @@ def set_expired_status():
 	cond = "qo.docstatus = 1 and qo.status != 'Expired' and qo.valid_till < %s"
 	# check if those QUO have SO against it
 	so_against_quo = """
-		SELECT 
+		SELECT
 			so.name FROM `tabSales Order` so, `tabSales Order Item` so_item
-		WHERE 
+		WHERE
 			so_item.docstatus = 1 and so.docstatus = 1
 			and so_item.parent = so.name
 			and so_item.prevdoc_docname = qo.name"""
@@ -283,9 +285,17 @@ def _make_customer(source_name, ignore_permissions=False):
 						return customer
 					else:
 						raise
-				except frappe.MandatoryError:
+				except frappe.MandatoryError as e:
+					mandatory_fields = e.args[0].split(':')[1].split(',')
+					mandatory_fields = [customer.meta.get_label(field.strip()) for field in mandatory_fields]
+
 					frappe.local.message_log = []
-					frappe.throw(_("Please create Customer from Lead {0}").format(lead_name))
+					lead_link = frappe.utils.get_link_to_form("Lead", lead_name)
+					message = _("Could not auto create Customer due to the following missing mandatory field(s):") + "<br>"
+					message += "<br><ul><li>" + "</li><li>".join(mandatory_fields) + "</li></ul>"
+					message += _("Please create Customer from Lead {0}.").format(lead_link)
+
+					frappe.throw(message, title=_("Mandatory Missing"))
 			else:
 				return customer_name
 		else:
